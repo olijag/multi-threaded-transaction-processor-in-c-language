@@ -1,36 +1,61 @@
+// Error codes:
+// 00 or 0: No errors in both threads - all ok.
+// 01: No error in 'innThread', but error opening file in 'utThread'.
+// 10: Error opening file 'incoming.txt', no error in 'utThread'.
+// 11: Error opening file 'incoming.txt' and 'outgoing.txt'.
+// 02: No error in 'innThread', invalid data format when reading in 'utThread'.
+// 20: Invalid data format when reading in 'innThread', no error in 'utThread'.
+// 21: Invalid data format when reading in 'innThread' and error opening file in 'utThread'.
+// 22: Error closing both files.
+// 23: Error closing file 'incoming.txt' and invalid data format when reading in 'utThread'.
+// 03: No error in 'innThread', error closing file in 'utThread'.
+// 30: Error closing file 'incoming.txt', no error in 'utThread'.
+// 31: Error closing file 'incoming.txt' and error opening file in 'utThread'.
+// 32: Error closing file 'incoming.txt' and error closing file in 'utThread'.
+// 33: Invalid data format when reading in both threads.
+// Other: Unknown error.
+// Note: The code is structured so that the first digit represents the result from 'innThread' and the second from 'utThread'.
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <ctype.h>
 
-int balance = 0; // Global variable that holds the balance.
+int balance = 0; // Global variable holding the balance.
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; // Mutex to synchronize access to 'balance'.
 
-// Checks if a string contains only digits. This does not allow negative signs.
+// Checks if a string contains only numbers. This does not allow negative signs.
 int isValidNumber(const char *string) {
-    for (int i = 0; string[i] != '\0'; i++) {
-        if (!isdigit(string[i]))
+    int i = 0;
+    while (string[i] != '\0') {
+        if (!isdigit(string[i]) && string[i] != '\n') {  // Ignore special characters
             return 0;
+        }
+        i++;
     }
     return 1;
 }
 
-// Reads amount from the file "incoming.txt" and increases 'balance'.
+// Reads amounts from the file "incoming.txt" and increases 'balance'.
 void *readIn() { 
-    FILE *in_file_pointer = fopen("incoming.txt", "r");
-    if (in_file_pointer == NULL) {
-        return (void*)1;
+    FILE *inn_file_pointer = fopen("incoming.txt", "r");
+    int *return_code = malloc(sizeof(int));
+
+    if (inn_file_pointer == NULL) {
+        *return_code = 1;
+        return return_code;
     }
     
     char amountIn[256];
     int line = 0;
 
-    while (fscanf(in_file_pointer, "%s", amountIn) == 1) {
+    while (fgets(amountIn, 255, inn_file_pointer) != NULL) { // Uses fgets to avoid overbuffering
         line++;
         if (!isValidNumber(amountIn)) {
             printf("Error on line %d in file incoming.txt: '%s' is not a valid integer.\n", line, amountIn);
-            fclose(in_file_pointer);
-            return (void*)3;
+            fclose(inn_file_pointer);
+            *return_code = 3;
+            return return_code;
         }
 
         pthread_mutex_lock(&mutex);
@@ -38,29 +63,35 @@ void *readIn() {
         pthread_mutex_unlock(&mutex);
     }
     
-    if (fclose(in_file_pointer) != 0) {
-        return (void*)2;
+    if (fclose(inn_file_pointer) != 0) {
+        *return_code = 2;
+        return return_code;
     }
 
-    return NULL;
+    *return_code = 0; // No errors
+    return return_code;
 }
 
-// Reads amount from the file "outgoing.txt" and decreases 'balance'.
+// Reads amounts from the file "outgoing.txt" and decreases 'balance'.
 void *readOut() {
-    FILE *out_file_pointer = fopen("outgoing.txt", "r");
-    if (out_file_pointer == NULL) {
-        return (void*)1;
+    FILE *ut_file_pointer = fopen("outgoing.txt", "r");
+    int *return_code = malloc(sizeof(int));
+
+    if (ut_file_pointer == NULL) {
+        *return_code = 1;
+        return return_code;
     }
     
     char amountOut[256];
     int line = 0;
 
-    while (fscanf(out_file_pointer, "%s", amountOut) == 1) {
+    while (fgets(amountOut, 255, ut_file_pointer) != NULL) { // Uses fgets to avoid overbuffering
         line++;
         if (!isValidNumber(amountOut)) {
-            printf("Error on line %d in file outgoing.txt: '%s' is not a valid integer.\n", line, amountOut);
-            fclose(out_file_pointer);
-            return (void*)3;
+            printf("Error on line %d in file outgoing.txt: %s is not a valid integer.\n", line, amountOut);
+            fclose(ut_file_pointer);
+            *return_code = 3;
+            return return_code;
         }
 
         pthread_mutex_lock(&mutex);
@@ -68,60 +99,72 @@ void *readOut() {
         pthread_mutex_unlock(&mutex);
     }
     
-    if (fclose(out_file_pointer) != 0) {
-        return (void*)2;
+    if (fclose(ut_file_pointer) != 0) {
+        *return_code = 2;
+        return return_code;
     }
 
-    return NULL;
+    *return_code = 0; // No errors
+    return return_code;
 }
 
-// Prints out error messages based on the error code and file name.
+// Prints error messages based on the error code and file name.
 void printErrorMessage(long errorCode, char fileName[]) {
     switch(errorCode) {
         case 1:
-            printf("Error: The file '%s' could not be opened.\n", fileName);
+            printf("Error: Could not open file %s.\n", fileName);
             break;
         case 2:
-            printf("Error: Error closing the file '%s'.\n", fileName);
+            printf("Error: Error closing file %s.\n", fileName);
             break;
         case 3:
-            printf("Error: Invalid data format in the file '%s'.\n", fileName);
+            printf("Error: Invalid data format in file %s.\n", fileName);
             break;
         default:
-            printf("Error: Unknown error occurred in the file '%s'.\n", fileName);
+            printf("Error: Unknown error occurred in file %s.\n", fileName);
             break;
     }
 }
 
 // Main function that creates threads to read in and out amounts, and handles errors.
 int main(){
-    pthread_t inThread, outThread;
+    pthread_t innThread, utThread;
 
     // Creates threads for reading in and out amounts.
-    if (pthread_create(&inThread, NULL, &readIn, NULL) != 0) {
-        printf("Error creating in-thread.\n");
+    if (pthread_create(&innThread, NULL, &readIn, NULL) != 0) {
+        printf("Error creating 'innThread'.\n");
         return 1;
     }
     
-    if (pthread_create(&outThread, NULL, &readOut, NULL) != 0) {
-        printf("Error creating out-thread.\n");
+    if (pthread_create(&utThread, NULL, &readOut, NULL) != 0) {
+        printf("Error creating 'utThread'.\n");
         return 2;
     }
 
     // Waits for the threads to finish and checks for any errors.
-    void *inStatus;
-    void *outStatus;
-    pthread_join(inThread, &inStatus);
-    pthread_join(outThread, &outStatus);
+    void *innStatus;
+    void *utStatus;
+    pthread_join(innThread, &innStatus);
+    pthread_join(utThread, &utStatus);
 
-    // Handles errors if any, and prints out the final balance if no errors.
-    if (inStatus != NULL || outStatus != NULL) {
-        if (inStatus != NULL) printErrorMessage((long)inStatus, "incoming.txt");
-        if (outStatus != NULL) printErrorMessage((long)outStatus, "outgoing.txt");
+    int errorCodeINN = innStatus ? *(int*)innStatus : 0;
+    int errorCodeUT = utStatus ? *(int*)utStatus : 0;
+
+    // Free memory after use
+    free(innStatus);
+    free(utStatus);
+
+    // Check if one or more errors occurred, and print the message
+    if (errorCodeINN != 0 || errorCodeUT != 0) {
         printf("One or more errors occurred during processing. The balance may be incorrect.\n");
+        if (errorCodeINN != 0) printErrorMessage(errorCodeINN, "incoming.txt");
+        if (errorCodeUT != 0) printErrorMessage(errorCodeUT, "outgoing.txt");
     } else {
-        printf("Balance: %d USD\n", balance);
+        printf("Balance: $ %d\n", balance);
     }
 
-    return 0;
+    // Print error code
+    // A meaningful error code for debugging
+    int returnCode = (errorCodeINN * 10) + errorCodeUT;
+    return returnCode;
 }
